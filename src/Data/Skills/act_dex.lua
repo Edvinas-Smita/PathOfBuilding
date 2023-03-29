@@ -1370,11 +1370,182 @@ skills["BladeBlast"] = {
 			name = "Blade Hits Per Sec",
 			stages = true,
 		},
+		{
+			name = "Calculated blades from best blade generating skill",
+			stages = true,
+		},
 	},
-	preDamageFunc = function(activeSkill, output)
-		activeSkill.skillData.dpsMultiplier = (activeSkill.skillData.dpsMultiplier or 1) * activeSkill.skillData.dpsBaseMultiplier
-		if activeSkill.skillPart == 2 then
-			activeSkill.skillData.hitTimeOverride = 1
+	preDamageFunc = function(activeSkill, output, breakdown)
+		local BBSkillData = activeSkill.skillData
+		local BBSkillModList = activeSkill.skillModList
+		local BBSkillCfg = activeSkill.skillCfg
+		if activeSkill.skillPart <3 then
+			BBSkillData.dpsMultiplier = (BBSkillData.dpsMultiplier or 1) * BBSkillData.dpsBaseMultiplier
+			BBSkillData.hitTimeOverride = activeSkill.skillPart == 2 and 1 or nil
+		else
+			activeSkill.skillTypes[SkillType.CanRapidFire] = nil
+			
+			local BBActivationTime, BBCastTime
+			if BBSkillData.triggered then
+				if BBSkillData.triggeredByBrand then
+					BBActivationTime = 1 / (1 + BBSkillModList:Sum("INC", BBSkillCfg, "Speed", "BrandActivationFrequency") / 100)
+							/ BBSkillModList:More(BBSkillCfg, "BrandActivationFrequency")
+							-- * (BBSkillModList:Sum("BASE", BBSkillCfg, "ArcanistSpellsLinked") or 1)
+							/ math.min(BBSkillModList:Sum("BASE", BBSkillCfg, "Multiplier:ConfigActiveBrands") or 1, BBSkillModList:Sum("BASE", BBSkillCfg, "BrandsAttachedLimit") + 1) -- Multiplier:ConfigBrandsAttachedToEnemy with relevant caps might be better
+				else
+					BBActivationTime = BBSkillData.triggerRate and 1 / BBSkillData.triggerRate or math.huge
+				end
+				BBCastTime = 0
+			else
+				BBCastTime = activeSkill.activeEffect.grantedEffect.castTime / calcLib.mod(BBSkillModList, BBSkillCfg, "Speed") / output.ActionSpeedMod
+				BBActivationTime = BBCastTime
+			end
+			
+			local function hitChance(enemyRadius, damageRadius, spreadRadiusX, spreadRadiusY, areaOffsetX, areaOffsetY) -- not to be confused with attack hit chance
+				local damagingAreaRadius = damageRadius + enemyRadius - 1	-- radius where area damage can land to hit the enemy;
+				-- -1 because of two assumptions: PoE coordinates are integers and damage is not registered if the two areas only share a point or vertex. If either is not correct, then -1 is not needed.
+				
+				local overlapX1 = math.max(-damagingAreaRadius, areaOffsetX - spreadRadiusX)
+				local overlapX2 = math.min(damagingAreaRadius, areaOffsetX + spreadRadiusX)
+				local overlapX = overlapX2 - overlapX1
+				
+				local overlapY1 = math.max(-damagingAreaRadius, areaOffsetY - spreadRadiusY)
+				local overlapY2 = math.min(damagingAreaRadius, areaOffsetY + spreadRadiusY)
+				local overlapY = overlapY2 - overlapY1
+				
+				local overlapArea = overlapX > 0 and overlapY > 0 and overlapX * overlapY or 0
+				local spreadArea = 4 * spreadRadiusX * spreadRadiusY
+				
+				return math.min(overlapArea / spreadArea, 1)
+			end
+			local enemyRadius = BBSkillModList:Override(BBSkillCfg, "EnemyRadius") or BBSkillModList:Sum("BASE", BBSkillCfg, "EnemyRadius")
+			local BBRadius = output.AreaOfEffectRadius
+			
+			local isGeneratingBlades = {
+				Bladefall = true,
+				EtherealKnivesAltX = true,
+			}
+			local bladeGenSkills = {}
+			local SkillDPSMultiplier = {}
+			for _, otherSkill in ipairs(activeSkill.actor.activeSkillList) do
+				if isGeneratingBlades[otherSkill.activeEffect.grantedEffect.id] then
+					local skillModList = otherSkill.skillModList
+					local skillCfg = otherSkill.skillCfg
+					
+					local EKBlades = math.floor(skillModList:Sum("BASE", skillCfg, "ProjectileCount"))	-- could divide by ethereal_knives_blade_left_in_ground_for_every_X_projectiles for futureproofing
+					local BFBlades = math.floor(skillModList:Sum("BASE", skillCfg, "VolleyCount"))		-- could divide by bladefall_blade_left_in_ground_for_every_X_volleys for futureproofing
+					local bladesPerOccurrence = math.floor((BFBlades > 0 and BFBlades or EKBlades > 0 and EKBlades) * (otherSkill.skillData.triggered and 0.5 or 1))
+							* (1 + skillModList:Sum("BASE", skillCfg, "DoubleLingeringBladeChance") / 100)
+							* (skillModList:Flag(nil, "SupportedByAwakenedCascade") and 5 or skillModList:Flag(nil, "SupportedByCascade") and 3 or 1)
+					local maxBlades = skillModList:Sum("BASE", skillCfg, "LingeringBladeMax")
+					
+					local CURSOR_UNITS_BEFORE_NAMELOCK = activeSkill.activeStageCount or 0
+					local overlappingBlades = nil
+					if skillCfg.skillName == "Bladefall" then
+						local BFRadiusX = math.floor(otherSkill.skillData.radius * math.floor(100 * math.sqrt(calcLib.mod(skillModList, skillCfg, "AreaOfEffect"))) / 100)
+						local BFRadiusY = math.floor(otherSkill.skillData.radiusSecondary * math.floor(100 * math.sqrt(calcLib.mod(skillModList, skillCfg, "AreaOfEffect"))) / 100)
+						
+						overlappingBlades = 0
+						for volleyN = 0, BFBlades - 1 do
+							local chance = hitChance(enemyRadius, BBRadius, BFRadiusX, BFRadiusY, 0, volleyN * (BFRadiusY * 2 - 4) - CURSOR_UNITS_BEFORE_NAMELOCK)
+							overlappingBlades = overlappingBlades + chance
+							table.insert(SkillDPSMultiplier, string.format("Center cast volley #%d: %.2f%%", volleyN, chance * 100))
+						end
+						if skillModList:Flag(nil, "SupportedByAwakenedCascade") or skillModList:Flag(nil, "SupportedByCascade") then
+							for volleyN = 0, BFBlades - 1 do
+								local chance = hitChance(enemyRadius, BBRadius, BFRadiusX, BFRadiusY, 0, volleyN * (BFRadiusY * 2 - 4) - BFRadiusX - CURSOR_UNITS_BEFORE_NAMELOCK)
+								overlappingBlades = overlappingBlades + chance
+								table.insert(SkillDPSMultiplier, string.format("Back cast volley #%d: %.2f%%", volleyN, chance * 100))
+							end
+							for volleyN = 0, BFBlades - 1 do
+								local chance = hitChance(enemyRadius, BBRadius, BFRadiusX, BFRadiusY, 0, volleyN * (BFRadiusY * 2 - 4) + BFRadiusX - CURSOR_UNITS_BEFORE_NAMELOCK)
+								overlappingBlades = overlappingBlades + chance
+								table.insert(SkillDPSMultiplier, string.format("Front cast volley #%d: %.2f%%", volleyN, chance * 100))
+							end
+						end
+						if skillModList:Flag(nil, "SupportedByAwakenedCascade") then
+							for volleyN = 0, BFBlades - 1 do
+								local chance = hitChance(enemyRadius, BBRadius, BFRadiusX, BFRadiusY, -BFRadiusX, volleyN * (BFRadiusY * 2 - 4) - CURSOR_UNITS_BEFORE_NAMELOCK)
+								overlappingBlades = overlappingBlades + chance
+								table.insert(SkillDPSMultiplier, string.format("Left cast volley #%d: %.2f%%", volleyN, chance * 100))
+							end
+							for volleyN = 0, BFBlades - 1 do
+								local chance = hitChance(enemyRadius, BBRadius, BFRadiusX, BFRadiusY, BFRadiusX, volleyN * (BFRadiusY * 2 - 4) - CURSOR_UNITS_BEFORE_NAMELOCK)
+								overlappingBlades = overlappingBlades + chance
+								table.insert(SkillDPSMultiplier, string.format("Right cast volley #%d: %.2f%%", volleyN, chance * 100))
+							end
+						end
+					end
+					
+					if otherSkill.skillData.triggeredByBrand then
+						local triggerTime = 1 / (1 + skillModList:Sum("INC", skillCfg, "Speed", "BrandActivationFrequency") / 100)
+								/ skillModList:More(skillCfg, "BrandActivationFrequency")
+								-- * (skillModList:Sum("BASE", skillCfg, "ArcanistSpellsLinked") or 1)
+								/ math.min(skillModList:Sum("BASE", skillCfg, "Multiplier:ConfigActiveBrands") or 1, skillModList:Sum("BASE", skillCfg, "BrandsAttachedLimit") + 1) -- Multiplier:ConfigBrandsAttachedToEnemy with relevant caps might be better
+						local triggerCount = math.min(bladesPerOccurrence * BBActivationTime / triggerTime, maxBlades) / bladesPerOccurrence
+						local hitCount = triggerCount * (overlappingBlades or bladesPerOccurrence)
+						local hitsPerSec = hitCount / BBActivationTime
+						local bladeCount = triggerCount * bladesPerOccurrence
+						local bladesPerSec = bladeCount / BBActivationTime
+						table.insert(bladeGenSkills, { skill = otherSkill, bladeCount = bladeCount, hitCount = hitCount, timeForBlades = BBActivationTime, hitsPerSec = hitsPerSec, bladesPerSec = bladesPerSec })
+					elseif isTriggered(otherSkill) then
+						local triggerTime = calcSkillCooldown(skillModList, skillCfg, otherSkill.skillData)
+						local triggerCount = math.min(bladesPerOccurrence * BBActivationTime / triggerTime, maxBlades) / bladesPerOccurrence
+						local hitCount = triggerCount * (overlappingBlades or bladesPerOccurrence)
+						local bladeCount = triggerCount * bladesPerOccurrence
+						table.insert(bladeGenSkills, { skill = otherSkill, bladeCount = bladeCount, hitCount = hitCount, timeForBlades = BBActivationTime, hitsPerSec = hitCount / BBActivationTime, bladesPerSec = bladeCount / BBActivationTime })
+					else	-- TODO: totem and ?trap/mine?
+						local castTime = otherSkill.activeEffect.grantedEffect.castTime / calcLib.mod(skillModList, skillCfg, "Speed") / output.ActionSpeedMod
+						local unleash = skillModList:Flag(nil, "HasSeals")
+						local sealTime = skillModList:Sum("BASE", skillCfg, "SealGainFrequency") / calcLib.mod(skillModList, skillCfg, "SealGainFrequency")
+						local sealMax = skillModList:Sum("BASE", skillCfg, "SealCount")
+						
+						local unleashSealsWhileCastingBB = unleash and math.min(BBActivationTime / sealTime, sealMax) or 0
+						local castCountForUnderMaxBlades = math.max(math.floor(maxBlades / bladesPerOccurrence - unleashSealsWhileCastingBB), 1)
+						local timePerCastOrSeal = unleash and 1 / (1 / castTime + 1 / sealTime) or castTime
+						local timeForUnderMaxBladesAndOneBB = BBCastTime + castCountForUnderMaxBlades * timePerCastOrSeal
+						local hitsUnderMaxAndOneBB = castCountForUnderMaxBlades * (overlappingBlades or bladesPerOccurrence)
+						local bladesUnderMaxAndOneBB = castCountForUnderMaxBlades * bladesPerOccurrence
+						-- Mostly for the case when castCountForUnderMaxBlades gets clamped to 1
+						local oneGenAndOneBBTime = BBCastTime + castTime
+						local sealsGenAndOneBB = unleash and math.min(oneGenAndOneBBTime / sealTime, sealMax) or 0
+						local hitsOneGenAndOneBB = math.min((overlappingBlades or bladesPerOccurrence) * (1 + sealsGenAndOneBB), maxBlades)
+						local bladesOneGenAndOneBB = math.min(bladesPerOccurrence * (1 + sealsGenAndOneBB), maxBlades)
+						
+						if hitsUnderMaxAndOneBB / timeForUnderMaxBladesAndOneBB < hitsOneGenAndOneBB / oneGenAndOneBBTime then
+							table.insert(bladeGenSkills, { skill = otherSkill, bladeCount = bladesOneGenAndOneBB, hitCount = hitsOneGenAndOneBB, timeForBlades = oneGenAndOneBBTime, castCount = 1, hitsPerSec = hitsOneGenAndOneBB / oneGenAndOneBBTime, bladesPerSec = bladesOneGenAndOneBB / oneGenAndOneBBTime })
+						else
+							table.insert(bladeGenSkills, { skill = otherSkill, bladeCount = bladesUnderMaxAndOneBB, hitCount = hitsUnderMaxAndOneBB, timeForBlades = timeForUnderMaxBladesAndOneBB, castCount = castCountForUnderMaxBlades, hitsPerSec = hitsUnderMaxAndOneBB / timeForUnderMaxBladesAndOneBB, bladesPerSec = bladesUnderMaxAndOneBB / timeForUnderMaxBladesAndOneBB })
+						end
+					end
+				end
+			end
+			local bestGenerator = bladeGenSkills[1] or {}
+			for _, generator in ipairs(bladeGenSkills) do
+				if bestGenerator.bladesPerSec < generator.bladesPerSec then
+					bestGenerator = generator
+				end
+			end
+			
+			if breakdown and bestGenerator.skill then
+				local t_insert = table.insert
+				local s_format = string.format
+				breakdown.SkillDPSMultiplier = SkillDPSMultiplier
+				t_insert(breakdown.SkillDPSMultiplier, s_format("Best blade generating skill was found in %s", bestGenerator.skill.socketGroup.displayLabel))
+				if isTriggered(activeSkill) then
+					t_insert(breakdown.SkillDPSMultiplier, s_format("Average of %.2f lingering blades are generated in the %.2f seconds it takes for Blade Blast to trigger (%.2f blades/sec)", bestGenerator.bladeCount, bestGenerator.timeForBlades, bestGenerator.bladesPerSec))
+				elseif isTriggered(bestGenerator.skill) then
+					t_insert(breakdown.SkillDPSMultiplier, s_format("Average of %.2f lingering blades are generated per %.2f second cast of Blade Blast (%.2f blades/sec)", bestGenerator.bladeCount, bestGenerator.timeForBlades, bestGenerator.bladesPerSec))
+				else
+					t_insert(breakdown.SkillDPSMultiplier, s_format("Casting it %d time%s and then casting Blade Blast once", bestGenerator.castCount, bestGenerator.castCount > 1 and "s" or ""))
+					t_insert(breakdown.SkillDPSMultiplier, s_format("generates an average of %.2f lingering blades in %.2f seconds (%.2f blades/sec)", bestGenerator.bladeCount, bestGenerator.timeForBlades, bestGenerator.bladesPerSec))
+				end
+				t_insert(breakdown.SkillDPSMultiplier, s_format("when Blade Blast detonates those blades, an average of %.2f explosions hit the target (%.2f hits/sec)", bestGenerator.hitCount, bestGenerator.hitsPerSec))
+			end
+			
+			activeSkill.skillData.dpsMultiplier = bestGenerator.hitCount
+			activeSkill.skillData.hitTimeOverride = bestGenerator.timeForBlades ~= BBActivationTime and bestGenerator.timeForBlades or nil
+			output.SkillDPSMultiplier = activeSkill.skillData.dpsMultiplier
 		end
 	end,
 	baseFlags = {
@@ -2530,6 +2701,14 @@ skills["Bladefall"] = {
 		skill("radiusLabel", "Volley Width:"),
 		skill("radiusSecondary", 12),
 		skill("radiusSecondaryLabel", "Volley Length:"),
+	},
+	statMap = {
+		["bladefall_number_of_volleys"] = {
+			mod("VolleyCount", "BASE", nil),
+		},
+		["maximum_number_of_blades_left_in_ground"] = {
+			mod("LingeringBladeMax", "BASE", nil),
+		},
 	},
 	qualityStats = {
 		Default = {
@@ -6082,6 +6261,11 @@ skills["EtherealKnivesAltX"] = {
 	qualityStats = {
 		Default = {
 			{ "base_number_of_projectiles", 0.1 },
+		},
+	},
+	statMap = {
+		["maximum_number_of_blades_left_in_ground"] = {
+			mod("LingeringBladeMax", "BASE", nil),
 		},
 	},
 	constantStats = {

@@ -4995,6 +4995,9 @@ skills["SupportSpellCascade"] = {
 			mod("Damage", "MORE", nil),
 		},
 	},
+	baseMods = {
+		flag("SupportedByCascade"),
+	},
 	qualityStats = {
 		Default = {
 			{ "base_skill_area_of_effect_+%", 0.5 },
@@ -5068,6 +5071,9 @@ skills["SupportSpellCascadePlus"] = {
 		["support_spell_cascade_damage_+%_final"] = {
 			mod("Damage", "MORE", nil),
 		},
+	},
+	baseMods = {
+		flag("SupportedByAwakenedCascade"),
 	},
 	qualityStats = {
 		Default = {
