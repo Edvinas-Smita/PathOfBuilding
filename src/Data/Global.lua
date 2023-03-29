@@ -5,6 +5,17 @@
 --
 
 colorCodes = {
+	-- pob colors
+	CUSTOM = "^x5CF0BB",
+	SOURCE = "^x88FFFF",
+	UNSUPPORTED = "^xF05050",
+	WARNING = "^xFF9922",
+	TIP = "^x80A080",
+	POSITIVE = "^x33FF77",
+	NEGATIVE = "^xDD0022",
+	OFFENCE = "^xE07030",
+	DEFENCE = "^x8080E0",
+	-- poe colors
 	NORMAL = "^xC8C8C8",
 	MAGIC = "^x8888FF",
 	RARE = "^xFFFF77",
@@ -14,19 +25,10 @@ colorCodes = {
 	PROPHECY = "^xB54BFF",
 	CURRENCY = "^xAA9E82",
 	CRAFTED = "^xB8DAF1",
-	CUSTOM = "^x5CF0BB",
-	SOURCE = "^x88FFFF",
-	UNSUPPORTED = "^xF05050",
-	WARNING = "^xFF9922",
-	TIP = "^x80A080",
 	FIRE = "^xB97123",
 	COLD = "^x3F6DB3",
 	LIGHTNING = "^xADAA47",
 	CHAOS = "^xD02090",
-	POSITIVE = "^x33FF77",
-	NEGATIVE = "^xDD0022",
-	OFFENCE = "^xE07030",
-	DEFENCE = "^x8080E0",
 	SCION = "^xFFF0F0",
 	MARAUDER = "^xE05030",
 	RANGER = "^x70FF70",

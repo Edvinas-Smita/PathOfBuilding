@@ -484,6 +484,7 @@ function main:LoadSettings(ignoreBuild)
 				if node.attrib.nodePowerTheme then
 					self.nodePowerTheme = node.attrib.nodePowerTheme
 				end
+				self.colorblindMode = node.attrib.colorblindMode and node.attrib.colorblindMode == "true"
 				-- In order to preserve users' settings through renaming/merging this variable, we have this if statement to use the first found setting
 				-- Once the user has closed PoB once, they will be using the new `showThousandsSeparator` variable name, so after some time, this statement may be removed
 				if node.attrib.showThousandsCalcs then
@@ -531,6 +532,71 @@ function main:LoadSettings(ignoreBuild)
 					self.invertSliderScrollDirection = node.attrib.invertSliderScrollDirection == "true"
 				end
 			end
+		end
+	end
+	self:updateDrawStringWithColorblind()
+end
+
+function main:updateDrawStringWithColorblind()
+	if self.colorblindMode then
+		-- default simple graphic palette:
+		-- 0 black
+		-- 1 red
+		-- 2 green
+		-- 3 blue
+		-- 4 yellow
+		-- 5 magenta
+		-- 6 cyan
+		-- 7 white
+		-- 8 light grey
+		-- 9 grey
+		
+		-- color schemes from https://personal.sron.nl/~pault/
+		local PaulTolBrightQualitative = {
+			["3"] = "^x4477AA", -- blue
+			["6"] = "^x66CCEE", -- cyan
+			["2"] = "^x228833", -- green
+			["4"] = "^xCCBB44", -- yellow
+			["1"] = "^xEE6677", -- red
+			["5"] = "^xAA3377", -- purple
+			["9"] = "^xBBBBBB", -- grey
+			-- below are complements to fill SG palette
+			["0"] = "^0",
+			["7"] = "^7",
+			["9"] = "^9",
+		}
+		local PaulTolLightQualitative = {
+			LIGHT_BLUE = "^x77AADD",
+			LIGHT_CYAN = "^x99DDFF",
+			MINT = "^x44BB99",
+			PEAR = "^xBBCC33",
+			OLIVE = "^xAAAA00",
+			LIGHT_YELLOW = "^xEEDD88",
+			ORANGE = "^xEE8866",
+			PINK = "^xFFAABB",
+		}
+		
+		self.oldDrawString = DrawString
+		function _G.DrawString(x, y, align, height, font, text)
+			self.oldDrawString(x, y, align, height, font, text:gsub("%^(%d)", function(s)
+				return PaulTolBrightQualitative[s]
+			end))
+		end
+		
+		self.oldColorCodes = colorCodes
+		colorCodes.CUSTOM = PaulTolLightQualitative.OLIVE
+		colorCodes.SOURCE = PaulTolLightQualitative.LIGHT_CYAN
+		colorCodes.UNSUPPORTED = PaulTolLightQualitative.ORANGE
+		colorCodes.WARNING = PaulTolLightQualitative.PINK
+		colorCodes.TIP = PaulTolLightQualitative.PEAR
+		colorCodes.POSITIVE = PaulTolBrightQualitative["2"]
+		colorCodes.NEGATIVE = PaulTolBrightQualitative["1"]
+		colorCodes.OFFENCE = PaulTolLightQualitative.ORANGE
+		colorCodes.DEFENCE = PaulTolBrightQualitative["3"]
+	else
+		if self.oldColorCodes then
+			_G.colorCodes = self.oldColorCodes
+			_G.DrawString = self.oldDrawString
 		end
 	end
 end
@@ -616,6 +682,7 @@ function main:SaveSettings()
 		proxyURL = launch.proxyURL,
 		buildPath = (self.buildPath ~= self.defaultBuildPath and self.buildPath or nil),
 		nodePowerTheme = self.nodePowerTheme,
+		colorblindMode = tostring(self.colorblindMode),
 		showThousandsSeparators = tostring(self.showThousandsSeparators),
 		thousandsSeparator = self.thousandsSeparator,
 		decimalSeparator = self.decimalSeparator,
@@ -714,6 +781,13 @@ function main:OpenOptionsPopup()
 	controls.betaTest = new("CheckBoxControl", { "TOPLEFT", nil, "TOPLEFT" }, defaultLabelPlacementX, currentY, 20, "^7Opt-in to weekly beta test builds:", function(state)
 		self.betaTest = state
 	end)
+	
+	nextRow()
+	controls.colorblindMode = new("CheckBoxControl", { "TOPLEFT", nil, "TOPLEFT" }, defaultLabelPlacementX, currentY, 20, "^7Colorblind mode:", function(state)
+		self.colorblindMode = state
+		self:updateDrawStringWithColorblind()
+	end)
+	controls.colorblindMode.state = self.colorblindMode
 
 	nextRow()
 	drawSectionHeader("build", "Build-related options")
@@ -786,6 +860,7 @@ function main:OpenOptionsPopup()
 	controls.betaTest.state = self.betaTest
 	controls.titlebarName.state = self.showTitlebarName
 	local initialNodePowerTheme = self.nodePowerTheme
+	local initialColorBlindMode = self.colorblindMode
 	local initialThousandsSeparatorDisplay = self.showThousandsSeparators
 	local initialTitlebarName = self.showTitlebarName
 	local initialThousandsSeparator = self.thousandsSeparator
@@ -827,6 +902,7 @@ function main:OpenOptionsPopup()
 	end)
 	controls.cancel = new("ButtonControl", nil, 45, currentY, 80, 20, "Cancel", function()
 		self.nodePowerTheme = initialNodePowerTheme
+		self.colorblindMode = initialColorBlindMode
 		self.showThousandsSeparators = initialThousandsSeparatorDisplay
 		self.thousandsSeparator = initialThousandsSeparator
 		self.decimalSeparator = initialDecimalSeparator
